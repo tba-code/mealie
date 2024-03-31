@@ -3,6 +3,9 @@ from logging import Logger
 from typing import Generic, TypeVar
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
+from sqlite3.dbapi2 import IntegrityError as SQLiteUniqueViolation
+from psycopg2.errors import UniqueViolation
 from pydantic import UUID4, BaseModel
 
 from mealie.repos.repository_generic import RepositoryGeneric
@@ -45,6 +48,23 @@ class HttpRepo(Generic[C, R, U]):
             self.default_message = default_message
 
     def get_exception_message(self, ext: Exception) -> str:
+        # Unique Constraint Violation
+        if isinstance(ext, IntegrityError):
+            if isinstance(ext.orig, UniqueViolation):  # postgresql error.
+                msg = ext.orig.pgerror.splitlines()[1]
+                msg = msg.replace("DETAIL:  Key ", "").replace(" already exists.", "")
+                key, value = msg.replace("(", "").replace(")", "").split("=")
+
+            if isinstance(ext.orig, SQLiteUniqueViolation):  # sqllite3 issue
+                keys = ext.statement.split("(")[1].split(")")[0].split(", ")
+                key = str(ext.orig).split("UNIQUE constraint failed: ")[1].split(".")[1]
+                param_index = keys.index(key)
+                value = ext.params[param_index]
+
+            return f"{key.capitalize()} {value} is unavailable."
+
+        # I am genuinely not sure what this does.
+
         if self.exception_msgs:
             return self.exception_msgs(type(ext))
         return self.default_message
